@@ -15,5 +15,4 @@ func main() {
 
 	app.Init()
 	app.Run()
-	app.Exit()
 }
