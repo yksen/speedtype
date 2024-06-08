@@ -9,18 +9,16 @@ import (
 )
 
 var config struct {
-	options struct {
-		debug bool
-	}
+	debug bool
 }
+
 var eventQueue chan tb.Event
-var buffer string
 
 func Init() {
 	flaggy.SetName("speedtype")
 	flaggy.SetDescription("Typing test")
 
-	flaggy.Bool(&config.options.debug, "d", "debug", "Enable debug mode")
+	flaggy.Bool(&config.debug, "d", "debug", "Enable debug mode")
 	flaggy.Parse()
 
 	log.SetFormatter(&log.TextFormatter{
@@ -28,11 +26,10 @@ func Init() {
 		FullTimestamp:   true,
 		TimestampFormat: time.TimeOnly,
 	})
-	if config.options.debug {
+	if config.debug {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	tb.SetInputMode(tb.InputEsc)
 	eventQueue = make(chan tb.Event)
 	go func() {
 		for {
@@ -41,7 +38,17 @@ func Init() {
 	}()
 }
 
+const (
+	StateMenu = iota
+	StateGame
+	StateResults
+)
+
+var state = StateMenu
+var cursor int
+
 func Run() {
+	tb.SetCursor(padding+borderSize, padding+borderSize)
 	render()
 	for event := range eventQueue {
 		handleEvent(event)
@@ -53,7 +60,7 @@ func handleEvent(event tb.Event) {
 	case tb.EventKey:
 		onKey(event)
 	case tb.EventResize:
-		onResize(event)
+		onResize()
 	case tb.EventError:
 		log.Errorf("Error: %v", event.Err)
 	}
@@ -66,7 +73,7 @@ func onKey(event tb.Event) {
 	update(event)
 }
 
-func onResize(_ tb.Event) {
+func onResize() {
 	render()
 }
 
@@ -83,46 +90,79 @@ func Exit() {
 	tb.Clear(tb.ColorDefault, tb.ColorDefault|tb.AttrBold)
 }
 
+var buffer string
+
+const (
+	ActionAdd = iota
+	ActionRemove
+	ActionNone
+)
+
 func update(event tb.Event) {
+	action := ActionNone
 	if event.Ch != 0 {
 		buffer += string(event.Ch)
+		action = ActionAdd
+	} else {
+		switch event.Key {
+		case tb.KeySpace:
+			buffer += " "
+			action = ActionAdd
+		case tb.KeyBackspace, tb.KeyBackspace2:
+			if len(buffer) > 0 {
+				buffer = buffer[:len(buffer)-1]
+				action = ActionRemove
+			}
+		}
 	}
-	render()
+
+	switch action {
+	case ActionAdd:
+		cursorX, cursorY := getCursorPosition()
+		tb.SetChar(cursorX, cursorY, rune(buffer[cursor]))
+		cursor++
+	case ActionRemove:
+		cursor--
+		cursorX, cursorY := getCursorPosition()
+		tb.SetChar(cursorX, cursorY, ' ')
+	}
+
+	cursorX, cursorY := getCursorPosition()
+	tb.SetCursor(cursorX, cursorY)
+	tb.Flush()
+}
+
+func getCursorPosition() (int, int) {
+	width, _ := getTerminalSize()
+	cursorX := cursor % (width - 2*borderSize - 2*padding)
+	cursorY := cursor / (width - 2*borderSize - 2*padding)
+	return cursorX + padding + borderSize, cursorY + padding + borderSize
 }
 
 func render() {
 	tb.Clear(tb.ColorDefault, tb.ColorDefault)
-	border()
+	printBorder()
 	printBuffer()
 	tb.Flush()
 }
 
 const (
-	borderFgColor = tb.ColorWhite
-	borderBgColor = tb.ColorDefault
-	bufferFgColor = tb.ColorWhite
-	bufferBgColor = tb.ColorDefault
-)
-
-const (
-	TopLeft     = '╭'
-	TopRight    = '╮'
-	BottomLeft  = '╰'
-	BottomRight = '╯'
-	Horizontal  = '─'
-	Vertical    = '│'
+	ColorBgBorder = tb.ColorDefault
+	ColorFgBorder = tb.ColorWhite
+	ColorBgBuffer = tb.ColorDefault
+	ColorFgBuffer = tb.ColorWhite
 )
 
 var borderSize = 1
 var padding = 1
 
-func border() {
+func printBorder() {
 	width, height := getTerminalSize()
 	for x := 0; x < width; x++ {
 		for y := 0; y < height; y++ {
 			if x < borderSize || x >= width-borderSize || y < borderSize || y >= height-borderSize {
 				char := getBorderChar(x, y, width, height)
-				tb.SetCell(x, y, char, borderFgColor, borderBgColor)
+				tb.SetCell(x, y, char, ColorFgBorder, ColorBgBorder)
 			}
 		}
 	}
@@ -133,24 +173,33 @@ func getTerminalSize() (int, int) {
 	return tb.Size()
 }
 
+const (
+	BorderTopLeft     = '╭'
+	BorderTopRight    = '╮'
+	BorderBottomLeft  = '╰'
+	BorderBottomRight = '╯'
+	BorderHorizontal  = '─'
+	BorderVertical    = '│'
+)
+
 func getBorderChar(x, y, width, height int) rune {
 	if x < borderSize && y < borderSize {
-		return TopLeft
+		return BorderTopLeft
 	}
 	if x >= width-borderSize && y < borderSize {
-		return TopRight
+		return BorderTopRight
 	}
 	if x < borderSize && y >= height-borderSize {
-		return BottomLeft
+		return BorderBottomLeft
 	}
 	if x >= width-borderSize && y >= height-borderSize {
-		return BottomRight
+		return BorderBottomRight
 	}
 	if x < borderSize || x >= width-borderSize {
-		return Vertical
+		return BorderVertical
 	}
 	if y < borderSize || y >= height-borderSize {
-		return Horizontal
+		return BorderHorizontal
 	}
 	return ' '
 }
@@ -162,7 +211,7 @@ func printBuffer() {
 		for y := offset; y < height-offset; y++ {
 			index := x - offset + (y-offset)*(width-2*offset)
 			if index < len(buffer) {
-				tb.SetCell(x, y, rune(buffer[index]), bufferFgColor, bufferBgColor)
+				tb.SetCell(x, y, rune(buffer[index]), ColorFgBuffer, ColorBgBuffer)
 			}
 		}
 	}
