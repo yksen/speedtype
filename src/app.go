@@ -8,13 +8,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var eventQueue chan tb.Event
-
 var config struct {
 	options struct {
 		debug bool
 	}
 }
+var eventQueue chan tb.Event
+var buffer string
 
 func Init() {
 	flaggy.SetName("speedtype")
@@ -53,7 +53,7 @@ func handleEvent(event tb.Event) {
 	case tb.EventKey:
 		onKey(event)
 	case tb.EventResize:
-		render()
+		onResize(event)
 	case tb.EventError:
 		log.Errorf("Error: %v", event.Err)
 	}
@@ -63,7 +63,11 @@ func onKey(event tb.Event) {
 	if shouldExit(event) {
 		Exit()
 	}
-	update()
+	update(event)
+}
+
+func onResize(_ tb.Event) {
+	render()
 }
 
 func shouldExit(event tb.Event) bool {
@@ -79,14 +83,26 @@ func Exit() {
 	tb.Clear(tb.ColorDefault, tb.ColorDefault|tb.AttrBold)
 }
 
-func update() {
-
+func update(event tb.Event) {
+	if event.Ch != 0 {
+		buffer += string(event.Ch)
+	}
+	render()
 }
 
 func render() {
+	tb.Clear(tb.ColorDefault, tb.ColorDefault)
 	border()
+	printBuffer()
 	tb.Flush()
 }
+
+const (
+	borderFgColor = tb.ColorWhite
+	borderBgColor = tb.ColorDefault
+	bufferFgColor = tb.ColorWhite
+	bufferBgColor = tb.ColorDefault
+)
 
 const (
 	TopLeft     = '╭'
@@ -97,14 +113,16 @@ const (
 	Vertical    = '│'
 )
 
+var borderSize = 1
+var padding = 1
+
 func border() {
 	width, height := getTerminalSize()
-	fgColor := tb.ColorWhite
 	for x := 0; x < width; x++ {
 		for y := 0; y < height; y++ {
-			if x == 0 || x == width-1 || y == 0 || y == height-1 {
+			if x < borderSize || x >= width-borderSize || y < borderSize || y >= height-borderSize {
 				char := getBorderChar(x, y, width, height)
-				tb.SetCell(x, y, char, fgColor, tb.ColorDefault)
+				tb.SetCell(x, y, char, borderFgColor, borderBgColor)
 			}
 		}
 	}
@@ -116,23 +134,36 @@ func getTerminalSize() (int, int) {
 }
 
 func getBorderChar(x, y, width, height int) rune {
-	if x == 0 && y == 0 {
+	if x < borderSize && y < borderSize {
 		return TopLeft
 	}
-	if x == width-1 && y == 0 {
+	if x >= width-borderSize && y < borderSize {
 		return TopRight
 	}
-	if x == 0 && y == height-1 {
+	if x < borderSize && y >= height-borderSize {
 		return BottomLeft
 	}
-	if x == width-1 && y == height-1 {
+	if x >= width-borderSize && y >= height-borderSize {
 		return BottomRight
 	}
-	if x == 0 || x == width-1 {
+	if x < borderSize || x >= width-borderSize {
 		return Vertical
 	}
-	if y == 0 || y == height-1 {
+	if y < borderSize || y >= height-borderSize {
 		return Horizontal
 	}
 	return ' '
+}
+
+func printBuffer() {
+	width, height := getTerminalSize()
+	offset := borderSize + padding
+	for x := offset; x < width-offset; x++ {
+		for y := offset; y < height-offset; y++ {
+			index := x - offset + (y-offset)*(width-2*offset)
+			if index < len(buffer) {
+				tb.SetCell(x, y, rune(buffer[index]), bufferFgColor, bufferBgColor)
+			}
+		}
+	}
 }
