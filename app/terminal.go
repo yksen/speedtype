@@ -1,15 +1,19 @@
 package app
 
 import (
+	"fmt"
+
 	tb "github.com/nsf/termbox-go"
 )
 
+// Color constants
 const (
 	ColorBgMain  = tb.ColorDefault
 	ColorFgMain  = tb.ColorWhite
 	ColorFgWords = tb.ColorLightGray
 )
 
+// Border characters
 const (
 	BorderTopLeft     = '╭'
 	BorderTopRight    = '╮'
@@ -19,40 +23,66 @@ const (
 	BorderVertical    = '│'
 )
 
-const borderSize = 1
-const padding = 2
+// Layout constants
+const (
+	borderSize        = 1
+	paddingHorizontal = 3
+	paddingVertical   = 1
+	paddingRatio      = 3
+)
+
+type Rect struct {
+	X, Y, Width, Height int
+}
+
+/*
+Terminal layout:
+- Full: Full terminal size
+- Body: Terminal size without borders
+- Area: Terminal size without borders and padding
+
+	╭Full────────╮
+	│Body	     │
+	│    Area    │
+	│            │
+	╰────────────╯
+*/
+var Full, Body, Area Rect
+var Debug Rect
 
 var cursor int
+var inputBuffer []tb.Cell
+var targetBuffer string
 
-func GetTerminalSize() (int, int) {
+func UpdateTerminalSize() {
 	tb.Sync()
-	return tb.Size()
+	FullWidth, FullHeight := tb.Size()
+	Full = Rect{0, 0, FullWidth, FullHeight}
+	Body = Rect{borderSize, borderSize, FullWidth - 2*borderSize, FullHeight - 2*borderSize}
+	Area = Rect{borderSize + paddingHorizontal, borderSize + paddingVertical,
+		FullWidth - 2*borderSize - 2*paddingHorizontal,
+		FullHeight - 2*borderSize - 2*paddingVertical,
+	}
+	Debug = Rect{0, 0, FullWidth, 2}
 }
 
-func GetCursorPosition() (int, int) {
-	width, _ := GetTerminalSize()
-	cursorX := cursor % (width - 2*borderSize - 2*padding)
-	cursorY := cursor / (width - 2*borderSize - 2*padding)
-	return cursorX + padding + borderSize, cursorY + padding + borderSize
+func GetCursorPosition(rect Rect) (int, int) {
+	return rect.X + cursor%rect.Width, rect.Y + cursor/rect.Width
 }
 
-func GetBorderChar(x, y, width, height int) rune {
-	if x < borderSize && y < borderSize {
+func GetBorderChar(x, y int, rect Rect) rune {
+	switch {
+	case x == rect.X && y == rect.Y:
 		return BorderTopLeft
-	}
-	if x >= width-borderSize && y < borderSize {
+	case x == rect.X+rect.Width-1 && y == rect.Y:
 		return BorderTopRight
-	}
-	if x < borderSize && y >= height-borderSize {
+	case x == rect.X && y == rect.Y+rect.Height-1:
 		return BorderBottomLeft
-	}
-	if x >= width-borderSize && y >= height-borderSize {
+	case x == rect.X+rect.Width-1 && y == rect.Y+rect.Height-1:
 		return BorderBottomRight
-	}
-	if x < borderSize || x >= width-borderSize {
+	case x == rect.X || x == rect.X+rect.Width-1:
 		return BorderVertical
-	}
-	if y < borderSize || y >= height-borderSize {
+	case y == rect.Y || y == rect.Y+rect.Height-1:
 		return BorderHorizontal
 	}
 	return ' '
@@ -60,7 +90,7 @@ func GetBorderChar(x, y, width, height int) rune {
 
 func Render() {
 	tb.Clear(tb.ColorDefault, tb.ColorDefault)
-	printBorder()
+	printBorder(Full)
 
 	switch state {
 	case StateMenu:
@@ -74,12 +104,12 @@ func Render() {
 	tb.Flush()
 }
 
-func printBorder() {
-	width, height := GetTerminalSize()
+func printBorder(rect Rect) {
+	width, height := rect.Width, rect.Height
 	for x := 0; x < width; x++ {
 		for y := 0; y < height; y++ {
 			if x < borderSize || x >= width-borderSize || y < borderSize || y >= height-borderSize {
-				char := GetBorderChar(x, y, width, height)
+				char := GetBorderChar(x, y, rect)
 				tb.SetCell(x, y, char, ColorFgMain, ColorBgMain)
 			}
 		}
@@ -87,7 +117,7 @@ func printBorder() {
 }
 
 func printMenu() {
-	width, height := GetTerminalSize()
+	width, height := Area.Width, Area.Height
 	text := "Press Space to start"
 	textWidth := len(text)
 	x := (width - textWidth) / 2
@@ -98,46 +128,12 @@ func printMenu() {
 }
 
 func printGame() {
-	printStringBuffer(targetBuffer, ColorFgWords)
-	printCellBuffer(inputBuffer)
-}
-
-func printStringBuffer(buffer string, fg tb.Attribute) {
-	terminalWidth, terminalHeight := GetTerminalSize()
-	offset := borderSize + padding
-	areaWidth, areaHeight := terminalWidth-2*offset, terminalHeight-2*offset
-	bufferWidth := len(buffer) / areaHeight
-	bufferStartWidth := offset + (areaWidth-bufferWidth)/2
-	for x := offset; x < areaWidth; x++ {
-		for y := offset; y < areaHeight; y++ {
-			index := y - offset + (x-offset)*(areaHeight)
-			if index < len(buffer) {
-				char := buffer[index]
-				tb.SetCell(x+bufferStartWidth, y, rune(char), fg, ColorBgMain)
-			}
-		}
-	}
-}
-
-func printCellBuffer(buffer []tb.Cell) {
-	terminalWidth, terminalHeight := GetTerminalSize()
-	offset := borderSize + padding
-	areaWidth, areaHeight := terminalWidth-2*offset, terminalHeight-2*offset
-	bufferHeight := len(buffer) / areaWidth
-	bufferStartHeight := offset + (areaHeight-bufferHeight)/2
-	for x := offset; x < areaWidth; x++ {
-		for y := offset; y < areaHeight; y++ {
-			index := x - offset + (y-offset)*(areaWidth)
-			if index < len(buffer) {
-				cell := buffer[index]
-				tb.SetCell(x, y+bufferStartHeight, cell.Ch, cell.Fg, cell.Bg)
-			}
-		}
-	}
+	printBuffer(Area, targetBuffer, ColorFgWords, ColorBgMain)
+	printCellBuffer(Area, inputBuffer)
 }
 
 func printResult() {
-	width, height := GetTerminalSize()
+	width, height := Area.Width, Area.Height
 	text := "Press Space to restart"
 	textWidth := len(text)
 	x := (width - textWidth) / 2
@@ -145,4 +141,30 @@ func printResult() {
 	for i, char := range text {
 		tb.SetCell(x+i, y, char, ColorFgMain, ColorBgMain)
 	}
+}
+
+func printBuffer(rect Rect, buffer string, fg tb.Attribute, bg tb.Attribute) {
+	cellBuffer := make([]tb.Cell, len(buffer))
+	for i, char := range buffer {
+		cellBuffer[i] = tb.Cell{Ch: char, Fg: fg, Bg: bg}
+	}
+	printCellBuffer(rect, cellBuffer)
+}
+
+func printCellBuffer(rect Rect, buffer []tb.Cell) {
+	for x := rect.X; x < rect.X+rect.Width; x++ {
+		for y := rect.Y; y < rect.Y+rect.Height; y++ {
+			index := x - rect.X + (y-rect.Y)*rect.Width
+			if index < len(buffer) {
+				cell := buffer[index]
+				tb.SetCell(x, y, cell.Ch, cell.Fg, cell.Bg)
+			}
+		}
+	}
+}
+
+func printDebug() {
+	buffer := fmt.Sprintf("state: %d, cursor: %d, timeRemaining: %02d", state, cursor, int(timeRemaining.Seconds()))
+	printBuffer(Debug, buffer, tb.ColorCyan, ColorBgMain)
+	tb.Flush()
 }
